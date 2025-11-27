@@ -1,617 +1,986 @@
 import os
-import sys
-import re
-import socket
-import requests
-import threading
-import concurrent.futures
-import urllib.parse
-from datetime import datetime
-import telebot
-from telebot import types
-import dns.resolver
-import json
-import ipwhois
-from bs4 import BeautifulSoup
-import ssl
-import whois
-import geoip2.database
-import hashlib
 import base64
+import sys
+import hashlib
+import secrets
+from Crypto.Cipher import AES, ChaCha20
+from Crypto.Random import get_random_bytes
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad, unpad
+from flask import Flask, render_template, request, jsonify, send_file, session
+import io
+import tempfile
 
-# 🔐 CONFIGURATION
-BOT_TOKEN = "8083475134:AAGr2cNdYz3DBDtHArKShOYetAsNPzmezmc"
-ADMIN_ID = "7887268414"
-SCAN_THREADS = 50  # High-speed scanning
-TIMEOUT = 3  # Aggressive timeout
-MAX_RESOURCE_SIZE = 5242880  # 5MB max download size
+app = Flask(__name__)
+app.secret_key = 'your-secret-key-here'  # Change this in production!
 
-# 🔥 ADVANCED VULNERABILITY DETECTION ENGINE
-class QuantumScanner:
+class MultiLayerEncryption:
     def __init__(self):
-        self.results = {
-            "resources": {
-                "scripts": [],
-                "images": [],
-                "audio": [],
-                "video": []
-            }
-        }
-        self.critical_ports = [21, 22, 80, 443, 8080, 3306, 3389, 5900]
-        self.sensitive_files = [
-            "/.git/HEAD", "/.env", "/wp-config.php", "/.htaccess", 
-            "/backup.zip", "/adminer.php", "/phpinfo.php", "/.DS_Store",
-            "/config.inc.php", "/.svn/entries", "/WEB-INF/web.xml",
-            "/.well-known/security.txt", "/crossdomain.xml", "/clientaccesspolicy.xml",
-            "/phpmyadmin/index.php", "/test.php", "/backup.sql"
-        ]
-        self.exploit_patterns = {
-            "SQLi": r"select\s.*from|union\s.*select|insert\s.*into|update\s.*set|delete\s.*from",
-            "XSS": r"alert\(.*\)|<\s*script\s*>|onerror\s*=",
-            "LFI": r"\.\./|\.\.\\|etc/passwd|boot.ini|win.ini",
-            "RCE": r"system\(|exec\(|passthru\(|shell_exec\(",
-            "SSRF": r"url=.*http://|request=.*internal|proxy=.*127.0.0.1",
-            "JWT": r"eyJ[A-Za-z0-9-_=]+\.[A-Za-z0-9-_=]+\.?[A-Za-z0-9-_.+/=]*"
-        }
-        self.server_tech_patterns = {
-            "PHP": r"X-Powered-By: PHP|\.php\?|phpinfo\(\)",
-            "NodeJS": r"X-Powered-By: Express|node\.js",
-            "ASP.NET": r"X-Powered-By: ASP\.NET|\.aspx\?",
-            "WordPress": r"wp-content|wp-includes|wordpress",
-            "Joomla": r"joomla",
-            "Drupal": r"drupal"
-        }
+        self.key_file = "master.key"
+        self.salt_file = "encryption.salt"
+        self.master_key = self.load_or_create_keys()
 
-    def deep_scan(self, url):
-        """Comprehensive vulnerability assessment with exploit detection"""
-        start_time = datetime.now()
-        self.results = {
-            "target": url,
-            "vulnerabilities": [],
-            "resources": {
-                "scripts": [],
-                "images": [],
-                "audio": [],
-                "video": [],
-                "broken_links": []
-            },
-            "server_info": {}
-        }
+    def load_or_create_keys(self):
+        """Generate or load encryption keys with salt"""
+        if not os.path.exists(self.salt_file):
+            salt = get_random_bytes(32)
+            with open(self.salt_file, "wb") as f:
+                f.write(salt)
 
+        with open(self.salt_file, "rb") as f:
+            salt = f.read()
+
+        if not os.path.exists(self.key_file):
+            # Generate master password (in real usage, this would be user-provided)
+            master_password = get_random_bytes(32)
+            master_key = PBKDF2(master_password, salt, 32, count=1000000, hmac_hash_module=hashlib.sha512)
+
+            with open(self.key_file, "wb") as f:
+                f.write(master_key)
+            print("[+] Encryption keys created successfully.")
+        else:
+            with open(self.key_file, "rb") as f:
+                master_key = f.read()
+
+        return master_key
+
+    def generate_derived_keys(self):
+        """Generate multiple keys from master key for different layers"""
+        keys = {}
+        # Generate keys for different encryption layers
+        keys['aes'] = hashlib.sha256(self.master_key + b'aes_layer').digest()
+        keys['chacha'] = hashlib.sha256(self.master_key + b'chacha_layer').digest()
+        keys['xor1'] = hashlib.sha256(self.master_key + b'xor_layer1').digest()
+        keys['xor2'] = hashlib.sha256(self.master_key + b'xor_layer2').digest()
+        keys['hmac'] = hashlib.sha256(self.master_key + b'hmac_key').digest()
+        return keys
+
+    def strong_xor_encrypt(self, data, key, rounds=3):
+        """Enhanced XOR encryption with multiple rounds and key derivation"""
+        result = bytearray(data)
+        key_len = len(key)
+
+        for round_num in range(rounds):
+            # Derive round-specific key
+            round_key = hashlib.sha256(key + bytes([round_num])).digest()
+            for i in range(len(result)):
+                # XOR with key byte and position for more complexity
+                result[i] ^= round_key[i % len(round_key)]
+                result[i] ^= (i * 7) & 0xFF  # Add position-based XOR
+
+        return bytes(result)
+
+    def strong_xor_decrypt(self, data, key, rounds=3):
+        """Decrypt data encrypted with strong XOR (XOR is symmetric)"""
+        return self.strong_xor_encrypt(data, key, rounds)
+
+    def encrypt_bytes(self, data):
+        """Multi-layer encryption with AES, ChaCha20, and XOR"""
+        keys = self.generate_derived_keys()
+
+        # Layer 1: XOR Encryption
+        layer1 = self.strong_xor_encrypt(data, keys['xor1'])
+
+        # Layer 2: AES-256 Encryption
+        iv_aes = get_random_bytes(16)
+        cipher_aes = AES.new(keys['aes'], AES.MODE_CBC, iv_aes)
+        layer2 = cipher_aes.encrypt(pad(layer1, AES.block_size))
+
+        # Layer 3: ChaCha20 Encryption
+        nonce_chacha = get_random_bytes(12)
+        cipher_chacha = ChaCha20.new(key=keys['chacha'], nonce=nonce_chacha)
+        layer3 = cipher_chacha.encrypt(layer2)
+
+        # Layer 4: Final XOR
+        layer4 = self.strong_xor_encrypt(layer3, keys['xor2'])
+
+        # Create HMAC for integrity verification
+        hmac = hashlib.sha512(iv_aes + nonce_chacha + layer4 + keys['hmac']).digest()
+
+        # Combine all components
+        final_blob = iv_aes + nonce_chacha + layer4 + hmac
+
+        return final_blob
+
+    def decrypt_bytes(self, blob):
+        """Decrypt multi-layer encrypted data"""
         try:
-            # Extract domain and path
-            parsed = urllib.parse.urlparse(url)
-            domain = parsed.netloc
-            base_url = f"{parsed.scheme}://{domain}"
+            keys = self.generate_derived_keys()
 
-            # Phase 1: Network reconnaissance
-            self.results.update(self.network_recon(domain))
+            # Extract components
+            iv_aes = blob[:16]
+            nonce_chacha = blob[16:28]
+            encrypted_data = blob[28:-64]  # Remove HMAC
+            hmac_received = blob[-64:]
 
-            # Phase 2: Web vulnerability scanning
-            self.web_scan(url, base_url)
+            # Verify HMAC
+            hmac_calculated = hashlib.sha512(iv_aes + nonce_chacha + encrypted_data + keys['hmac']).digest()
+            if not secrets.compare_digest(hmac_calculated, hmac_received):
+                raise ValueError("Data integrity check failed!")
 
-            # Phase 3: Hidden content discovery
-            self.find_hidden_content(url)
+            # Layer 1: Reverse Final XOR
+            layer4 = self.strong_xor_decrypt(encrypted_data, keys['xor2'])
 
-            # Phase 4: Security header analysis
-            self.check_security_headers(url)
+            # Layer 2: ChaCha20 Decryption
+            cipher_chacha = ChaCha20.new(key=keys['chacha'], nonce=nonce_chacha)
+            layer3 = cipher_chacha.decrypt(layer4)
 
-            # Phase 5: Extract server metadata
-            self.extract_server_metadata(url)
+            # Layer 3: AES Decryption
+            cipher_aes = AES.new(keys['aes'], AES.MODE_CBC, iv_aes)
+            layer2 = unpad(cipher_aes.decrypt(layer3), AES.block_size)
 
-            # Phase 6: Resource extraction
-            self.extract_resources(url)
+            # Layer 4: Reverse XOR
+            layer1 = self.strong_xor_decrypt(layer2, keys['xor1'])
 
-            # Scan metadata
-            self.results['scan_duration'] = str(datetime.now() - start_time)
-            self.results['timestamp'] = str(start_time)
-
-            return self.results
+            return layer1
 
         except Exception as e:
-            return {"error": f"Scan failed: {str(e)}"}
+            raise ValueError(f"Decryption failed: {str(e)}")
 
-    def network_recon(self, domain):
-        """Network infrastructure intelligence"""
-        results = {}
+    def encrypt_text(self, text):
+        """Encrypt text with multi-layer encryption"""
+        encrypted = self.encrypt_bytes(text.encode('utf-8'))
+        return base64.b64encode(encrypted).decode('utf-8')
+
+    def decrypt_text(self, enc_text):
+        """Decrypt multi-layer encrypted text"""
+        raw = base64.b64decode(enc_text)
+        return self.decrypt_bytes(raw).decode('utf-8')
+
+    def encrypt_file(self, file_data, filename):
+        """Encrypt file with multi-layer encryption"""
         try:
-            # DNS reconnaissance
-            results['dns'] = {}
-            for qtype in ['A', 'AAAA', 'MX', 'NS', 'TXT', 'CNAME', 'SOA']:
-                try:
-                    answers = dns.resolver.resolve(domain, qtype, raise_on_no_answer=False)
-                    results['dns'][qtype] = [str(r) for r in answers]
-                except:
-                    pass
-
-            # IP information
-            try:
-                ip = socket.gethostbyname(domain)
-                results['ip'] = ip
-                results['ports'] = self.port_scan(ip)
-                whois = ipwhois.IPWhois(ip)
-                results['whois'] = whois.lookup_rdap()
-
-                # Geolocation
-                try:
-                    with geoip2.database.Reader('GeoLite2-City.mmdb') as reader:
-                        response = reader.city(ip)
-                        results['geo'] = {
-                            "country": response.country.name,
-                            "city": response.city.name,
-                            "postal": response.postal.code,
-                            "location": f"{response.location.latitude},{response.location.longitude}"
-                        }
-                except:
-                    results['geo'] = "Geolocation database missing"
-
-            except:
-                results['ip'] = "Resolution failed"
-
-            return results
-
-        except:
-            return {"network_error": "Recon failed"}
-
-    def port_scan(self, ip):
-        """Ultra-fast port scanning"""
-        open_ports = []
-        def check_port(port):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(TIMEOUT)
-                try:
-                    s.connect((ip, port))
-                    open_ports.append(port)
-
-                    # Banner grabbing
-                    try:
-                        banner = s.recv(1024).decode().strip()
-                        if banner:
-                            self.results.setdefault('banners', {})[port] = banner
-                    except:
-                        pass
-
-                    return True
-                except:
-                    return False
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=SCAN_THREADS) as executor:
-            executor.map(check_port, self.critical_ports)
-
-        return open_ports
-
-    def web_scan(self, url, base_url):
-        """Deep web vulnerability analysis"""
-        session = requests.Session()
-        session.headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-
-        try:
-            # Fetch target page
-            resp = session.get(url, timeout=TIMEOUT, verify=False)
-            content = resp.text
-
-            # Store server headers
-            self.results['server_info']['headers'] = dict(resp.headers)
-
-            # Check for vulnerabilities in content
-            for vuln_type, pattern in self.exploit_patterns.items():
-                if re.search(pattern, content, re.IGNORECASE):
-                    self.results['vulnerabilities'].append({
-                        "type": vuln_type,
-                        "severity": "CRITICAL",
-                        "evidence": "Detected exploit pattern in page content"
-                    })
-
-            # Analyze forms for vulnerabilities
-            soup = BeautifulSoup(content, 'html.parser')
-            for form in soup.find_all('form'):
-                form_action = form.get('action', '')
-                form_method = form.get('method', 'get').upper()
-
-                # Check for password fields without protection
-                if form.find('input', {'type': 'password'}):
-                    if not form_action.startswith('https://'):
-                        self.results['vulnerabilities'].append({
-                            "type": "Password Transmission",
-                            "severity": "HIGH",
-                            "evidence": f"Password field found in non-HTTPS form ({form_method} {form_action})"
-                        })
-
-            # Find broken resources
-            self.results['resources']['broken_links'] = self.find_broken_resources(session, url, content)
-
-            # Check for hidden comments
-            comments = soup.find_all(string=lambda text: isinstance(text, str) and '<!--' in text)
-            sensitive_comments = [c for c in comments if any(kw in c.lower() for kw in ['password', 'secret', 'key', 'admin'])]
-            if sensitive_comments:
-                self.results['vulnerabilities'].append({
-                    "type": "Sensitive Comments",
-                    "severity": "MEDIUM",
-                    "evidence": f"Found {len(sensitive_comments)} comments with sensitive keywords"
-                })
-
-            # Detect server technology
-            self.detect_server_tech(content, resp.headers)
-
+            encrypted_data = self.encrypt_bytes(file_data)
+            return encrypted_data, None
         except Exception as e:
-            self.results['scan_errors'] = f"Web scan failed: {str(e)}"
+            return None, f"File encryption failed: {str(e)}"
 
-    def detect_server_tech(self, content, headers):
-        """Identify server-side technologies"""
-        tech_found = []
-
-        # Check headers
-        powered_by = headers.get('X-Powered-By', '')
-        if powered_by:
-            tech_found.append(powered_by)
-
-        # Check content patterns
-        for tech, pattern in self.server_tech_patterns.items():
-            if re.search(pattern, content, re.IGNORECASE) or re.search(pattern, powered_by, re.IGNORECASE):
-                tech_found.append(tech)
-
-        # Deduplicate and save
-        if tech_found:
-            self.results['server_info']['technologies'] = list(set(tech_found))
-
-    def extract_server_metadata(self, url):
-        """Extract server metadata and configurations"""
+    def decrypt_file(self, file_data, filename):
+        """Decrypt multi-layer encrypted file"""
         try:
-            # WHOIS domain lookup
-            domain = urllib.parse.urlparse(url).netloc
-            w = whois.whois(domain)
-            self.results['server_info']['whois'] = {
-                "registrar": w.registrar,
-                "creation_date": str(w.creation_date),
-                "expiration_date": str(w.expiration_date),
-                "name_servers": w.name_servers
+            decrypted_data = self.decrypt_bytes(file_data)
+            return decrypted_data, None
+        except Exception as e:
+            return None, f"File decryption failed: {str(e)}"
+
+# Initialize the encryption system
+encryptor = MultiLayerEncryption()
+
+# HTML Template for the web interface
+HTML_TEMPLATE = '''
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureCrypt - Multi-Layer Encryption</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1d4ed8;
+            --secondary: #64748b;
+            --success: #10b981;
+            --error: #ef4444;
+            --background: #f8fafc;
+            --surface: #ffffff;
+            --text: #1e293b;
+            --border: #e2e8f0;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--background);
+            color: var(--text);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding: 40px 0 20px 0;
+        }
+
+        .header h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 1.1rem;
+            color: var(--secondary);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .card {
+            background: var(--surface);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid var(--border);
+            margin-bottom: 24px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+            background: #f8fafc;
+        }
+
+        .card-header h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text);
+        }
+
+        .card-body {
+            padding: 24px;
+        }
+
+        .nav-tabs {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+            border-radius: 8px 8px 0 0;
+            overflow: hidden;
+        }
+
+        .nav-tab {
+            padding: 16px 24px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            color: var(--secondary);
+            transition: all 0.2s ease;
+            border-bottom: 2px solid transparent;
+        }
+
+        .nav-tab:hover {
+            color: var(--primary);
+            background: #f8fafc;
+        }
+
+        .nav-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            background: #f1f5f9;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        textarea, input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.95rem;
+            transition: border-color 0.2s ease;
+            background: var(--surface);
+        }
+
+        textarea:focus, input[type="text"]:focus {
+            border-color: var(--primary);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.9rem;
+        }
+
+        .btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .btn:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-block {
+            width: 100%;
+        }
+
+        .result-box {
+            margin-top: 20px;
+            padding: 16px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 4px solid var(--primary);
+        }
+
+        .result-box pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 0.85rem;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid transparent;
+        }
+
+        .alert-success {
+            background: #f0fdf4;
+            color: #166534;
+            border-left-color: var(--success);
+        }
+
+        .alert-error {
+            background: #fef2f2;
+            color: #991b1b;
+            border-left-color: var(--error);
+        }
+
+        .file-info {
+            margin-top: 12px;
+            padding: 12px;
+            background: #f8fafc;
+            border-radius: 6px;
+            font-size: 0.9rem;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .status-item {
+            padding: 16px;
+            background: #f8fafc;
+            border-radius: 8px;
+            border-left: 4px solid var(--primary);
+        }
+
+        .status-item h3 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding: 20px 0;
+            color: var(--secondary);
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .dev-credit {
+            color: var(--primary);
+            font-weight: 500;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
             }
 
-            # SSL/TLS certificate inspection
-            hostname = domain.split(':')[0]
-            ctx = ssl.create_default_context()
-            with ctx.wrap_socket(socket.socket(), server_hostname=hostname) as s:
-                s.settimeout(TIMEOUT)
-                s.connect((hostname, 443))
-                cert = s.getpeercert()
+            .header h1 {
+                font-size: 2rem;
+            }
 
-                self.results['server_info']['ssl'] = {
-                    "issuer": dict(x[0] for x in cert['issuer']),
-                    "subject": dict(x[0] for x in cert['subject']),
-                    "version": cert.get('version'),
-                    "serial_number": cert.get('serialNumber'),
-                    "expires": cert.get('notAfter')
+            .nav-tabs {
+                flex-direction: column;
+            }
+
+            .nav-tab {
+                text-align: left;
+                border-bottom: 1px solid var(--border);
+                border-left: 4px solid transparent;
+            }
+
+            .nav-tab.active {
+                border-left-color: var(--primary);
+                border-bottom-color: var(--border);
+            }
+
+            .status-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SecureCrypt</h1>
+            <p>Enterprise-grade multi-layer encryption for text and files</p>
+        </div>
+
+        <div class="card">
+            <div class="nav-tabs">
+                <button class="nav-tab active" onclick="switchTab('text-encrypt')">Text Encryption</button>
+                <button class="nav-tab" onclick="switchTab('text-decrypt')">Text Decryption</button>
+                <button class="nav-tab" onclick="switchTab('file-encrypt')">File Encryption</button>
+                <button class="nav-tab" onclick="switchTab('file-decrypt')">File Decryption</button>
+                <button class="nav-tab" onclick="switchTab('system-info')">System Info</button>
+            </div>
+
+            <div class="card-body">
+                <!-- Text Encryption Tab -->
+                <div id="text-encrypt" class="tab-content active">
+                    <div class="form-group">
+                        <label for="plainText">Text to Encrypt</label>
+                        <textarea id="plainText" name="plainText" placeholder="Enter sensitive text here..."></textarea>
+                    </div>
+                    <button class="btn btn-block" onclick="encryptText()">Encrypt Text</button>
+                    <div id="textEncryptResult"></div>
+                </div>
+
+                <!-- Text Decryption Tab -->
+                <div id="text-decrypt" class="tab-content">
+                    <div class="form-group">
+                        <label for="encryptedText">Encrypted Text</label>
+                        <textarea id="encryptedText" name="encryptedText" placeholder="Paste encrypted text here..."></textarea>
+                    </div>
+                    <button class="btn btn-block" onclick="decryptText()">Decrypt Text</button>
+                    <div id="textDecryptResult"></div>
+                </div>
+
+                <!-- File Encryption Tab -->
+                <div id="file-encrypt" class="tab-content">
+                    <div class="form-group">
+                        <label for="fileToEncrypt">File to Encrypt</label>
+                        <input type="file" id="fileToEncrypt" name="file">
+                    </div>
+                    <button class="btn btn-block" onclick="encryptFile()">Encrypt File</button>
+                    <div id="fileEncryptResult"></div>
+                </div>
+
+                <!-- File Decryption Tab -->
+                <div id="file-decrypt" class="tab-content">
+                    <div class="form-group">
+                        <label for="fileToDecrypt">File to Decrypt</label>
+                        <input type="file" id="fileToDecrypt" name="file">
+                    </div>
+                    <button class="btn btn-block" onclick="decryptFile()">Decrypt File</button>
+                    <div id="fileDecryptResult"></div>
+                </div>
+
+                <!-- System Info Tab -->
+                <div id="system-info" class="tab-content">
+                    <h3 style="margin-bottom: 16px;">System Status</h3>
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <h3>Encryption System</h3>
+                            <p><strong>Master Key:</strong> <span id="masterKeyStatus" class="status-badge">Checking...</span></p>
+                            <p><strong>Salt File:</strong> <span id="saltStatus" class="status-badge">Checking...</span></p>
+                        </div>
+                        <div class="status-item">
+                            <h3>Environment</h3>
+                            <p><strong>Python:</strong> <span id="pythonVersion">-</span></p>
+                            <p><strong>Platform:</strong> <span id="platform">-</span></p>
+                        </div>
+                    </div>
+
+                    <h3 style="margin: 24px 0 16px 0;">Security Features</h3>
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <h3>Encryption Layers</h3>
+                            <ul style="padding-left: 20px; color: var(--secondary); font-size: 0.9rem;">
+                                <li>AES-256 (CBC Mode)</li>
+                                <li>ChaCha20 Stream Cipher</li>
+                                <li>Multi-round XOR</li>
+                                <li>HMAC-SHA512 Integrity</li>
+                            </ul>
+                        </div>
+                        <div class="status-item">
+                            <h3>Key Management</h3>
+                            <ul style="padding-left: 20px; color: var(--secondary); font-size: 0.9rem;">
+                                <li>PBKDF2 Key Derivation</li>
+                                <li>Salt-based Key Generation</li>
+                                <li>Layer-specific Keys</li>
+                                <li>Secure Random IVs</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>SecureCrypt v1.0 | <span class="dev-credit">Dev By ForSy</span> | Enterprise Encryption Solution</p>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Remove active class from all tabs
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Show selected tab content
+            document.getElementById(tabName).classList.add('active');
+
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+
+            // Load system info when switching to that tab
+            if (tabName === 'system-info') {
+                loadSystemInfo();
+            }
+        }
+
+        function loadSystemInfo() {
+            fetch('/system-info')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('pythonVersion').textContent = data.python_version.split(' ')[0];
+                    document.getElementById('platform').textContent = data.platform;
+
+                    const masterKeyStatus = document.getElementById('masterKeyStatus');
+                    const saltStatus = document.getElementById('saltStatus');
+
+                    masterKeyStatus.textContent = data.master_key_exists ? 'â Secured' : 'â Missing';
+                    masterKeyStatus.className = data.master_key_exists ? 'status-badge status-success' : 'status-badge status-error';
+
+                    saltStatus.textContent = data.salt_exists ? 'â Present' : 'â Missing';
+                    saltStatus.className = data.salt_exists ? 'status-badge status-success' : 'status-badge status-error';
+                });
+        }
+
+        function encryptText() {
+            const plainText = document.getElementById('plainText').value;
+            if (!plainText.trim()) {
+                showAlert('textEncryptResult', 'Please enter text to encrypt', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('plainText', plainText);
+
+            fetch('/encrypt-text', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const resultHtml = `
+                        <div class="alert alert-success">
+                            Text encrypted successfully
+                        </div>
+                        <div class="result-box">
+                            <strong>Encrypted Output:</strong>
+                            <pre>${data.encrypted_text}</pre>
+                        </div>
+                    `;
+                    document.getElementById('textEncryptResult').innerHTML = resultHtml;
+                } else {
+                    showAlert('textEncryptResult', data.error, 'error');
                 }
+            })
+            .catch(error => {
+                showAlert('textEncryptResult', 'Network error occurred', 'error');
+            });
+        }
 
-        except Exception as e:
-            self.results['server_info']['metadata_error'] = str(e)
+        function decryptText() {
+            const encryptedText = document.getElementById('encryptedText').value;
+            if (!encryptedText.trim()) {
+                showAlert('textDecryptResult', 'Please enter encrypted text', 'error');
+                return;
+            }
 
-    def extract_resources(self, url):
-        """Extract scripts, images, audio, and video resources"""
-        try:
-            resp = requests.get(url, timeout=TIMEOUT, verify=False)
-            soup = BeautifulSoup(resp.text, 'html.parser')
+            const formData = new FormData();
+            formData.append('encryptedText', encryptedText);
 
-            # Extract scripts
-            for script in soup.find_all('script'):
-                if script.get('src'):
-                    script_url = urllib.parse.urljoin(url, script.get('src'))
-                    self.results['resources']['scripts'].append({
-                        "url": script_url,
-                        "content": self.get_resource_content(script_url)
-                    })
+            fetch('/decrypt-text', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const resultHtml = `
+                        <div class="alert alert-success">
+                            Text decrypted successfully
+                        </div>
+                        <div class="result-box">
+                            <strong>Decrypted Text:</strong>
+                            <pre>${data.decrypted_text}</pre>
+                        </div>
+                    `;
+                    document.getElementById('textDecryptResult').innerHTML = resultHtml;
+                } else {
+                    showAlert('textDecryptResult', data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showAlert('textDecryptResult', 'Network error occurred', 'error');
+            });
+        }
 
-            # Extract images
-            for img in soup.find_all('img'):
-                if img.get('src'):
-                    img_url = urllib.parse.urljoin(url, img.get('src'))
-                    self.results['resources']['images'].append({
-                        "url": img_url,
-                        "content": self.get_resource_content(img_url, binary=True)
-                    })
+        function encryptFile() {
+            const fileInput = document.getElementById('fileToEncrypt');
+            const file = fileInput.files[0];
 
-            # Extract audio/video
-            for media in soup.find_all(['audio', 'video', 'source']):
-                src = media.get('src') or media.get('data-src')
-                if src:
-                    media_url = urllib.parse.urljoin(url, src)
-                    self.results['resources']['audio' if media.name == 'audio' else 'video'].append({
-                        "url": media_url,
-                        "content": self.get_resource_content(media_url, binary=True)
-                    })
+            if (!file) {
+                showAlert('fileEncryptResult', 'Please select a file', 'error');
+                return;
+            }
 
-        except Exception as e:
-            self.results['resources']['extraction_error'] = str(e)
+            const formData = new FormData();
+            formData.append('file', file);
 
-    def get_resource_content(self, url, binary=False):
-        """Fetch resource content with size limitation"""
-        try:
-            resp = requests.get(url, timeout=TIMEOUT, stream=True, verify=False)
-            content = b''
-            for chunk in resp.iter_content(chunk_size=8192):
-                content += chunk
-                if len(content) > MAX_RESOURCE_SIZE:
-                    return "RESOURCE_TOO_LARGE"
+            document.getElementById('fileEncryptResult').innerHTML = '<div class="alert">Encrypting file... Please wait.</div>';
 
-            if binary:
-                return base64.b64encode(content).decode('utf-8')
-            else:
-                return content.decode('utf-8', errors='ignore')
-        except:
-            return None
+            fetch('/encrypt-file', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const resultHtml = `
+                        <div class="alert alert-success">
+                            File encrypted successfully
+                        </div>
+                        <div class="file-info">
+                            <p><strong>Original:</strong> ${data.original_filename}</p>
+                            <p><strong>Size:</strong> ${formatFileSize(data.file_size)}</p>
+                        </div>
+                        <button class="btn" onclick="downloadFile('${data.download_url}', '${data.encrypted_filename}')" style="margin-top: 12px;">
+                            Download Encrypted File
+                        </button>
+                    `;
+                    document.getElementById('fileEncryptResult').innerHTML = resultHtml;
+                } else {
+                    showAlert('fileEncryptResult', data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showAlert('fileEncryptResult', 'Network error occurred', 'error');
+            });
+        }
 
-    def find_hidden_content(self, url):
-        """Discover hidden files and directories"""
-        parsed = urllib.parse.urlparse(url)
-        base_path = os.path.dirname(parsed.path) if parsed.path else '/'
+        function decryptFile() {
+            const fileInput = document.getElementById('fileToDecrypt');
+            const file = fileInput.files[0];
 
-        found = []
-        for file in self.sensitive_files:
-            try:
-                test_url = urllib.parse.urljoin(url, file)
-                resp = requests.head(test_url, timeout=TIMEOUT, verify=False)
-                if resp.status_code == 200:
-                    found.append({
-                        "path": test_url,
-                        "status": resp.status_code,
-                        "content_type": resp.headers.get('Content-Type', '')
-                    })
+            if (!file) {
+                showAlert('fileDecryptResult', 'Please select a file', 'error');
+                return;
+            }
 
-                    # Check for exposed .git directory
-                    if '/.git/' in file:
-                        self.results['vulnerabilities'].append({
-                            "type": "Exposed Git Repository",
-                            "severity": "CRITICAL",
-                            "evidence": f"Found accessible .git directory at {test_url}"
-                        })
-            except:
-                pass
+            const formData = new FormData();
+            formData.append('file', file);
 
-        self.results['hidden_content'] = found
+            document.getElementById('fileDecryptResult').innerHTML = '<div class="alert">Decrypting file... Please wait.</div>';
 
-    def find_broken_resources(self, session, url, content):
-        """Find broken links and resources"""
-        broken = []
-        links = re.findall(r'href=[\'"]?([^\'" >]+)', content)
-        links += re.findall(r'src=[\'"]?([^\'" >]+)', content)
+            fetch('/decrypt-file', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const resultHtml = `
+                        <div class="alert alert-success">
+                            File decrypted successfully
+                        </div>
+                        <div class="file-info">
+                            <p><strong>Original:</strong> ${data.original_filename}</p>
+                            <p><strong>Size:</strong> ${formatFileSize(data.file_size)}</p>
+                        </div>
+                        <button class="btn" onclick="downloadFile('${data.download_url}', '${data.decrypted_filename}')" style="margin-top: 12px;">
+                            Download Decrypted File
+                        </button>
+                    `;
+                    document.getElementById('fileDecryptResult').innerHTML = resultHtml;
+                } else {
+                    showAlert('fileDecryptResult', data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showAlert('fileDecryptResult', 'Network error occurred', 'error');
+            });
+        }
 
-        for link in set(links):
-            try:
-                abs_url = urllib.parse.urljoin(url, link)
-                if abs_url.startswith('http'):
-                    resp = session.head(abs_url, timeout=TIMEOUT, allow_redirects=True)
-                    if resp.status_code >= 400:
-                        broken.append({
-                            "url": abs_url,
-                            "status": resp.status_code
-                        })
-            except:
-                broken.append({"url": link, "status": "Connection failed"})
+        function showAlert(elementId, message, type) {
+            const alertClass = type === 'error' ? 'alert-error' : 'alert-success';
+            document.getElementById(elementId).innerHTML = `
+                <div class="alert ${alertClass}">
+                    ${message}
+                </div>
+            `;
+        }
 
-        return broken
+        function formatFileSize(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
 
-    def check_security_headers(self, url):
-        """Analyze security headers"""
-        try:
-            resp = requests.head(url, timeout=TIMEOUT, verify=False)
-            headers = resp.headers
-            missing = []
+        function downloadFile(url, filename) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
 
-            if 'Content-Security-Policy' not in headers:
-                missing.append("Content-Security-Policy")
-            if 'X-Frame-Options' not in headers:
-                missing.append("X-Frame-Options")
-            if 'X-Content-Type-Options' not in headers:
-                missing.append("X-Content-Type-Options")
-            if 'Strict-Transport-Security' not in headers and url.startswith('https'):
-                missing.append("Strict-Transport-Security")
+        // Load system info on page load if on system info tab
+        document.addEventListener('DOMContentLoaded', function() {
+            if (document.getElementById('system-info').classList.contains('active')) {
+                loadSystemInfo();
+            }
+        });
+    </script>
+</body>
+</html>
+'''
 
-            if missing:
-                self.results['vulnerabilities'].append({
-                    "type": "Missing Security Headers",
-                    "severity": "MEDIUM",
-                    "evidence": f"Missing: {', '.join(missing)}"
-                })
+@app.route('/')
+def index():
+    return HTML_TEMPLATE
 
-        except:
-            pass
+@app.route('/encrypt-text', methods=['POST'])
+def encrypt_text():
+    try:
+        plain_text = request.form['plainText']
+        if not plain_text.strip():
+            return jsonify({'success': False, 'error': 'No text provided'})
 
-# 🤖 TELEGRAM BOT INTERFACE
-class QuantumScannerBot:
-    def __init__(self, token):
-        self.bot = telebot.TeleBot(token)
-        self.scanner = QuantumScanner()
+        encrypted_text = encryptor.encrypt_text(plain_text)
+        return jsonify({'success': True, 'encrypted_text': encrypted_text})
 
-        # 🔒 Admin-only access
-        @self.bot.message_handler(func=lambda message: str(message.from_user.id) != ADMIN_ID)
-        def reject_non_admin(message):
-            self.bot.reply_to(message, "⛔ ACCESS DENIED: Unauthorized user")
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
-        # 🕵️‍♂️ Command handlers
-        @self.bot.message_handler(commands=['start', 'help'], func=lambda message: str(message.from_user.id) == ADMIN_ID)
-        def send_welcome(message):
-            self.bot.reply_to(message,
-                "⚡ QUANTUM VULNERABILITY SCANNER ACTIVE\n\n"
-                "🔥 Commands:\n"
-                "/scan <url> - Deep vulnerability scan\n"
-                "/rescan - Re-run last scan\n"
-                "/report - Get full vulnerability report\n"
-                "/resources - Get extracted resources\n"
-                "/serverinfo - Get server intelligence"
-            )
+@app.route('/decrypt-text', methods=['POST'])
+def decrypt_text():
+    try:
+        encrypted_text = request.form['encryptedText']
+        if not encrypted_text.strip():
+            return jsonify({'success': False, 'error': 'No encrypted text provided'})
 
-        @self.bot.message_handler(regexp=r'^/scan .+', func=lambda message: str(message.from_user.id) == ADMIN_ID)
-        def handle_scan(message):
-            target = message.text.split(' ', 1)[1].strip()
-            if not target.startswith('http'):
-                target = 'http://' + target
+        decrypted_text = encryptor.decrypt_text(encrypted_text)
+        return jsonify({'success': True, 'decrypted_text': decrypted_text})
 
-            self.bot.reply_to(message, f"⚡ INITIATING QUANTUM SCAN: {target}")
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
-            try:
-                report = self.scanner.deep_scan(target)
-                self.last_report = report
+@app.route('/encrypt-file', methods=['POST'])
+def encrypt_file():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'})
 
-                # Generate summary
-                vuln_count = len(report.get('vulnerabilities', []))
-                ports = report.get('ports', [])
-                hidden = len(report.get('hidden_content', []))
-                broken = len(report.get('resources', {}).get('broken_links', []))
-                scripts = len(report.get('resources', {}).get('scripts', []))
-                images = len(report.get('resources', {}).get('images', []))
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'})
 
-                summary = (
-                    f"✅ SCAN COMPLETE: {target}\n"
-                    f"⏱️ Duration: {report.get('scan_duration', 'N/A')}\n\n"
-                    f"🔓 CRITICAL VULNERABILITIES: {vuln_count}\n"
-                    f"🔌 OPEN PORTS: {', '.join(map(str, ports)) if ports else 'None'}\n"
-                    f"📁 HIDDEN FILES: {hidden}\n"
-                    f"🔗 BROKEN LINKS: {broken}\n"
-                    f"📜 SCRIPTS FOUND: {scripts}\n"
-                    f"🖼️ IMAGES FOUND: {images}"
-                )
+        file_data = file.read()
+        encrypted_data, error = encryptor.encrypt_file(file_data, file.filename)
 
-                self.bot.reply_to(message, summary)
+        if error:
+            return jsonify({'success': False, 'error': error})
 
-                # Send critical vulnerabilities immediately
-                for vuln in report.get('vulnerabilities', []):
-                    if vuln['severity'] in ['CRITICAL', 'HIGH']:
-                        self.bot.reply_to(message, 
-                            f"🚨 {vuln['severity']} VULNERABILITY: {vuln['type']}\n"
-                            f"Evidence: {vuln['evidence']}"
-                        )
+        # Store encrypted file in session for download
+        session['encrypted_file'] = base64.b64encode(encrypted_data).decode('utf-8')
+        session['encrypted_filename'] = file.filename + '.encrypted'
 
-            except Exception as e:
-                self.bot.reply_to(message, f"💥 SCAN FAILED: {str(e)}")
+        return jsonify({
+            'success': True,
+            'original_filename': file.filename,
+            'encrypted_filename': session['encrypted_filename'],
+            'file_size': len(encrypted_data),
+            'download_url': '/download-encrypted'
+        })
 
-        @self.bot.message_handler(commands=['report'], func=lambda message: str(message.from_user.id) == ADMIN_ID)
-        def handle_report(message):
-            if hasattr(self, 'last_report'):
-                report = self.last_report
-                response = f"📊 FULL VULNERABILITY REPORT\n"
-                response += f"🔗 Target: {report['target']}\n"
-                response += f"🕒 Timestamp: {report['timestamp']}\n"
-                response += f"⏱️ Duration: {report['scan_duration']}\n\n"
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
-                # Vulnerabilities
-                response += "🔓 VULNERABILITIES:\n"
-                for vuln in report.get('vulnerabilities', []):
-                    response += (
-                        f"• {vuln['severity']}: {vuln['type']}\n"
-                        f"  Evidence: {vuln['evidence']}\n\n"
-                    )
+@app.route('/decrypt-file', methods=['POST'])
+def decrypt_file():
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file provided'})
 
-                # Network info
-                response += "🌐 NETWORK INTELLIGENCE:\n"
-                response += f"• IP: {report.get('ip', 'N/A')}\n"
-                response += f"• Open Ports: {', '.join(map(str, report.get('ports', []))) or 'None'}\n\n"
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'No file selected'})
 
-                # Hidden content
-                if report.get('hidden_content'):
-                    response += "📁 HIDDEN CONTENT FOUND:\n"
-                    for item in report['hidden_content']:
-                        response += f"• {item['path']} ({item['status']})\n"
+        file_data = file.read()
+        decrypted_data, error = encryptor.decrypt_file(file_data, file.filename)
 
-                self.bot.reply_to(message, response)
-            else:
-                self.bot.reply_to(message, "❌ No scan report available")
+        if error:
+            return jsonify({'success': False, 'error': error})
 
-        @self.bot.message_handler(commands=['serverinfo'], func=lambda message: str(message.from_user.id) == ADMIN_ID)
-        def handle_serverinfo(message):
-            if hasattr(self, 'last_report') and 'server_info' in self.last_report:
-                info = self.last_report['server_info']
-                response = "🖥️ SERVER INTELLIGENCE REPORT\n\n"
+        # Store decrypted file in session for download
+        session['decrypted_file'] = base64.b64encode(decrypted_data).decode('utf-8')
 
-                # Headers
-                response += "📋 HEADERS:\n"
-                for k, v in info.get('headers', {}).items():
-                    response += f"• {k}: {v}\n"
+        # Determine original filename
+        if file.filename.endswith('.encrypted'):
+            original_name = file.filename[:-10]  # Remove .encrypted
+        else:
+            original_name = file.filename + '.decrypted'
 
-                # Technologies
-                if 'technologies' in info:
-                    response += f"\n🔧 TECHNOLOGIES: {', '.join(info['technologies'])}\n"
+        session['decrypted_filename'] = original_name
 
-                # SSL info
-                if 'ssl' in info:
-                    ssl = info['ssl']
-                    response += f"\n🔐 SSL CERTIFICATE:\n"
-                    response += f"• Issuer: {ssl.get('issuer', {}).get('organizationName', 'Unknown')}\n"
-                    response += f"• Valid Until: {ssl.get('expires', 'Unknown')}\n"
+        return jsonify({
+            'success': True,
+            'original_filename': file.filename,
+            'decrypted_filename': session['decrypted_filename'],
+            'file_size': len(decrypted_data),
+            'download_url': '/download-decrypted'
+        })
 
-                # WHOIS
-                if 'whois' in info:
-                    whois = info['whois']
-                    response += f"\n📝 WHOIS DATA:\n"
-                    response += f"• Registrar: {whois.get('registrar', 'Unknown')}\n"
-                    response += f"• Created: {whois.get('creation_date', 'Unknown')}\n"
-                    response += f"• Expires: {whois.get('expiration_date', 'Unknown')}\n"
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
 
-                self.bot.reply_to(message, response)
-            else:
-                self.bot.reply_to(message, "❌ No server information available")
+@app.route('/download-encrypted')
+def download_encrypted():
+    if 'encrypted_file' not in session:
+        return "No encrypted file available", 404
 
-        @self.bot.message_handler(commands=['resources'], func=lambda message: str(message.from_user.id) == ADMIN_ID)
-        def handle_resources(message):
-            if hasattr(self, 'last_report') and 'resources' in self.last_report:
-                res = self.last_report['resources']
-                response = "📦 EXTRACTED RESOURCES REPORT\n\n"
+    file_data = base64.b64decode(session['encrypted_file'])
+    filename = session.get('encrypted_filename', 'encrypted_file.encrypted')
 
-                response += f"📜 SCRIPTS: {len(res['scripts'])}\n"
-                for i, script in enumerate(res['scripts'][:3], 1):
-                    content_preview = script['content'][:100] + "..." if script['content'] else "EMPTY"
-                    response += f"{i}. {script['url']}\n   Preview: {content_preview}\n"
+    return send_file(
+        io.BytesIO(file_data),
+        as_attachment=True,
+        download_name=filename,
+        mimetype='application/octet-stream'
+    )
 
-                response += f"\n🖼️ IMAGES: {len(res['images'])}\n"
-                for i, img in enumerate(res['images'][:3], 1):
-                    response += f"{i}. {img['url']}\n   Size: {len(img['content']) if img['content'] else 0} bytes\n"
+@app.route('/download-decrypted')
+def download_decrypted():
+    if 'decrypted_file' not in session:
+        return "No decrypted file available", 404
 
-                response += f"\n🔊 AUDIO: {len(res['audio'])}\n"
-                for i, audio in enumerate(res['audio'][:3], 1):
-                    response += f"{i}. {audio['url']}\n"
+    file_data = base64.b64decode(session['decrypted_file'])
+    filename = session.get('decrypted_filename', 'decrypted_file')
 
-                response += f"\n🔗 BROKEN LINKS: {len(res['broken_links'])}\n"
-                for i, link in enumerate(res['broken_links'][:5], 1):
-                    response += f"{i}. {link['url']} (Status: {link['status']})\n"
+    return send_file(
+        io.BytesIO(file_data),
+        as_attachment=True,
+        download_name=filename,
+        mimetype='application/octet-stream'
+    )
 
-                self.bot.reply_to(message, response)
-            else:
-                self.bot.reply_to(message, "❌ No resources available")
+@app.route('/system-info')
+def system_info():
+    key_exists = os.path.exists("master.key")
+    salt_exists = os.path.exists("encryption.salt")
 
-    def run(self):
-        """Start the bot"""
-        print("⚡ QUANTUM VULNERABILITY SCANNER BOT ACTIVATED ⚡")
-        self.bot.polling(none_stop=True)
+    return jsonify({
+        'python_version': sys.version,
+        'platform': sys.platform,
+        'master_key_exists': key_exists,
+        'salt_exists': salt_exists
+    })
 
-# 💀 MAIN EXECUTION
+def main():
+    """Main function to run the application"""
+    print("=" * 60)
+    print("       SECURECRYPT - MULTI-LAYER ENCRYPTION")
+    print("              Professional Web Edition")
+    print("=" * 60)
+    print("\nStarting web server...")
+    print("Web interface available at: http://localhost:5000")
+    print("Developer: ForSy")
+    print("\nPress Ctrl+C to stop the server")
+
+    # Run Flask app
+    app.run(debug=True, host='0.0.0.0', port=5000)
+
 if __name__ == "__main__":
-    if BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        print("❌ ERROR: Replace BOT_TOKEN with your Telegram bot token!")
-        sys.exit(1)
-    if ADMIN_ID == "YOUR_TELEGRAM_USER_ID":
-        print("❌ ERROR: Replace ADMIN_ID with your Telegram user ID!")
-        sys.exit(1)
-
-    print(r"""
-    ██████╗ ██╗   ██╗ █████╗ ███╗   ██╗████████╗██╗   ██╗███╗   ███╗
-    ██╔══██╗██║   ██║██╔══██╗████╗  ██║╚══██╔══╝██║   ██║████╗ ████║
-    ██████╔╝██║   ██║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║
-    ██╔═══╝ ██║   ██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║
-    ██║     ╚██████╔╝██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║
-    ╚═╝      ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝
-    """)
-
-    bot = QuantumScannerBot(BOT_TOKEN)
-    bot.run()
-# دالة الاستجابة لأمر /start
-def start(update, context):
-    update.message.reply_text("مرحبًا! أنا شغال 24/7 🔥")
-
-# إعداد البوت
-updater = Updater(token=TOKEN, use_context=True)
-dp = updater.dispatcher
-dp.add_handler(CommandHandler("start", start))
-
-# تشغيل البوت
-updater.start_polling()
-updater.idle()
-
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n[!] Server stopped by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"\n[!] An error occurred: {str(e)}")
+        sys.exit(1) 
