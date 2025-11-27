@@ -984,3 +984,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[!] An error occurred: {str(e)}")
         sys.exit(1) 
+        print
